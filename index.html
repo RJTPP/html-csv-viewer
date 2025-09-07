@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>JSONL/CSV Table Viewer (Resizable Columns)</title>
+<title>CSV Table Viewer</title>
 <style>
   :root { --bg:#f7f7f8; --card:#fff; --ink:#111; --muted:#666; --bord:#e5e7eb; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color:var(--ink); background:var(--bg); }
   .container { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
-  .h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .h1 { font-size: 20px; font-weight: 700; margin-bottom: 10px; }
   .muted { color: var(--muted); }
   .card { background:var(--card); border:1px solid var(--bord); border-radius:16px; }
   .drop { padding:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
@@ -59,12 +59,12 @@
 </head>
 <body>
   <div class="container">
-    <div class="h1">JSONL/CSV Table Viewer</div>
-    <div class="muted">Single HTML file. Works offline. Optimized for very long text fields (LLM responses). Drag headers to resize columns; double-click a handle to auto-fit the current page.</div>
+    <div class="h1">CSV/JSONL Table Viewer</div>
+    <div class="muted" style="margin-bottom: 10px;">Single HTML file. Works offline. Optimized for very long text fields.</div>
 
     <div class="card drop" id="drop">
       <div>
-        <div><strong>Drop</strong> a .jsonl or .csv here</div>
+        <div><strong>Drop</strong> a .csv, .tsv, or .jsonl file here</div>
         <div class="muted" style="font-size:12px">or choose a file below</div>
       </div>
       <label class="btn primary">
@@ -73,29 +73,34 @@
       </label>
     </div>
 
-      <div class="toolbar">
-        <div class="row">
+    <div class="toolbar">
+      <div class="row">
+        <input id="search" type="text" placeholder="Filter rows (case-insensitive)">
         <select id="searchField" style="max-width:180px">
           <option value="*" selected>All fields</option>
         </select>
-          <input id="search" type="text" placeholder="Filter rows (case-insensitive)">
-          <select id="pagesize" style="max-width:140px">
-            <option>10</option>
-            <option selected>25</option>
-            <option>50</option>
+        <select id="pagesize" style="max-width:100px">
+          <option>10</option>
+          <option selected>25</option>
+          <option>50</option>
           <option>100</option>
           <option>200</option>
           <option>500</option>
         </select>
       </div>
       <div class="right">
-        <label class="btn" title="Allow table to exceed page width">
-          <input id="overflowToggle" type="checkbox" style="margin-right:6px"> Expand
+        <label class="btn" title="Allow table to exceed page width" style="min-width: fit-content; display: flex; align-items: center">
+          <input id="overflowToggle" type="checkbox" style="margin-right:6px">
+          Expand
         </label>
-        <button class="btn" id="exportCsv">Export CSV</button>
-        <button class="btn" id="exportJsonl">Export JSONL</button>
+        <button class="btn" id="openPaste" style="min-width: fit-content;">Paste Data</button>
+        <select id="exportSel" style="max-width:140px">
+          <option value="" selected disabled>Export</option>
+          <option value="csv">CSV</option>
+          <option value="jsonl">JSONL</option>
+        </select>
       </div>
-      </div>
+    </div>
 
       <div class="card" style="margin-top:8px">
       <div class="status" id="status">
@@ -116,19 +121,6 @@
           <tbody id="tbody"></tbody>
         </table>
       </div>
-
-    <!-- Paste Input -->
-    <div class="card" style="margin-top:12px; padding:12px">
-      <div class="row wrap" style="align-items:center; gap:8px; margin-bottom:8px">
-        <div class="muted">Paste data:</div>
-        <select id="textFormat" style="max-width:140px">
-          <option value="jsonl" selected>JSONL</option>
-          <option value="csv">CSV/TSV</option>
-        </select>
-        <button class="btn" id="loadText">Load From Text</button>
-      </div>
-      <textarea id="paste" rows="6" placeholder="Paste JSONL (one JSON object per line) or CSV rows here" style="width:100%; border:1px solid var(--bord); border-radius:12px; padding:8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace;"></textarea>
-    </div>
     </div>
   </div>
 
@@ -146,6 +138,26 @@
     </div>
   </div>
 
+  <!-- Paste Modal -->
+  <div id="pasteModalBack" class="modalBack" style="display:none">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modalHead">
+        <div style="min-width:0; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Paste Data</div>
+        <div class="row">
+          <select id="textFormatModal" style="max-width:140px">
+            <option value="jsonl" selected>JSONL</option>
+            <option value="csv">CSV/TSV</option>
+          </select>
+          <button class="btn primary" id="pasteLoadBtn">Load</button>
+          <button class="btn" id="pasteCloseBtn">Close</button>
+        </div>
+      </div>
+      <div class="modalBody">
+        <textarea id="pasteModalTA" rows="12" placeholder="Paste JSONL (one JSON object per line) or CSV rows here" style="width:100%; border:1px solid var(--bord); border-radius:12px; padding:8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace;"></textarea>
+      </div>
+    </div>
+  </div>
+
   <script>
     (() => {
       const $ = (id) => document.getElementById(id);
@@ -153,10 +165,10 @@
       const drop = $("drop");
       const search = $("search");
       const pageSizeSel = $("pagesize");
-      const exportCsvBtn = $("exportCsv");
-      const exportJsonlBtn = $("exportJsonl");
+      const exportSel = $("exportSel");
       const tableEl = $("table");
       const searchFieldSel = $("searchField");
+      const openPaste = $("openPaste");
       const prevBtn = $("prev");
       const nextBtn = $("next");
       const thead = $("thead");
@@ -178,9 +190,11 @@
         return el;
       })();
       const containerEl = document.querySelector('.container');
-      const pasteTA = $("paste");
-      const loadTextBtn = $("loadText");
-      const textFormatSel = $("textFormat");
+      const pasteModalBack = $("pasteModalBack");
+      const pasteModalTA = $("pasteModalTA");
+      const pasteLoadBtn = $("pasteLoadBtn");
+      const pasteCloseBtn = $("pasteCloseBtn");
+      const textFormatModal = $("textFormatModal");
 
       let fileName = null;
       let rows = [];           // all parsed rows
@@ -752,14 +766,7 @@
         searchFieldSel.addEventListener('change', () => { page = 1; applyFilter(); renderPage(); });
       }
 
-      if (loadTextBtn) {
-        loadTextBtn.addEventListener('click', () => {
-          const fmt = (textFormatSel && textFormatSel.value) || 'jsonl';
-          const t = pasteTA && pasteTA.value || '';
-          if (!t.trim()) return;
-          if (fmt === 'csv') parseCSVText(t); else parseJSONLText(t);
-        });
-      }
+      // (Paste-from-card removed in favor of modal)
 
       prevBtn.onclick = () => { if (page > 1) { page--; renderPage(); } };
       nextBtn.onclick = () => { page++; renderPage(); };
@@ -781,7 +788,7 @@
       search.addEventListener('input', debounce(() => { page = 1; applyFilter(); renderPage(); }, 200));
       pageSizeSel.addEventListener('change', () => { page = 1; renderPage(); });
 
-      exportCsvBtn.onclick = () => {
+      function doExportCSV() {
         if (!columns.length) return;
         const header = columns.map(escCsv).join(',');
         const q = search.value.trim().toLowerCase();
@@ -793,9 +800,9 @@
         a.href = URL.createObjectURL(blob);
         a.download = (fileName ? fileName.replace(/\.[^/.]+$/, '') : 'data') + (q ? '_filtered' : '') + '.csv';
         a.click();
-      };
+      }
 
-      exportJsonlBtn.onclick = () => {
+      function doExportJSONL() {
         const q = search.value.trim().toLowerCase();
         const src = q ? filtered : rows;
         const blob = new Blob([src.map(r => JSON.stringify(r)).join('\n')], { type: 'application/json' });
@@ -803,7 +810,38 @@
         a.href = URL.createObjectURL(blob);
         a.download = (fileName ? fileName.replace(/\.[^/.]+$/, '') : 'data') + (q ? '_filtered' : '') + '.jsonl';
         a.click();
-      };
+      }
+
+      if (exportSel) {
+        exportSel.addEventListener('change', () => {
+          const v = exportSel.value;
+          if (v === 'csv') doExportCSV();
+          else if (v === 'jsonl') doExportJSONL();
+          exportSel.value = '';
+        });
+      }
+
+      if (openPaste && pasteModalBack && pasteModalTA) {
+        openPaste.addEventListener('click', () => {
+          pasteModalBack.style.display = 'flex';
+          setTimeout(() => { try { pasteModalTA.focus(); } catch {} }, 0);
+        });
+      }
+
+      if (pasteCloseBtn && pasteModalBack) {
+        pasteCloseBtn.addEventListener('click', () => { pasteModalBack.style.display = 'none'; });
+        pasteModalBack.addEventListener('click', (e) => { if (e.target === pasteModalBack) pasteCloseBtn.click(); });
+      }
+
+      if (pasteLoadBtn && pasteModalTA) {
+        pasteLoadBtn.addEventListener('click', () => {
+          const t = pasteModalTA.value || '';
+          if (!t.trim()) return;
+          const fmt = (textFormatModal && textFormatModal.value) || 'jsonl';
+          if (fmt === 'csv') parseCSVText(t); else parseJSONLText(t);
+          if (pasteCloseBtn) pasteCloseBtn.click();
+        });
+      }
     })();
   </script>
 </body>
