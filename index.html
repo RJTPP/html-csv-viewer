@@ -73,13 +73,16 @@
       </label>
     </div>
 
-    <div class="toolbar">
-      <div class="row">
-        <input id="search" type="text" placeholder="Filter rows (case-insensitive)">
-        <select id="pagesize" style="max-width:140px">
-          <option>10</option>
-          <option selected>25</option>
-          <option>50</option>
+      <div class="toolbar">
+        <div class="row">
+        <select id="searchField" style="max-width:180px">
+          <option value="*" selected>All fields</option>
+        </select>
+          <input id="search" type="text" placeholder="Filter rows (case-insensitive)">
+          <select id="pagesize" style="max-width:140px">
+            <option>10</option>
+            <option selected>25</option>
+            <option>50</option>
           <option>100</option>
           <option>200</option>
           <option>500</option>
@@ -92,14 +95,17 @@
         <button class="btn" id="exportCsv">Export CSV</button>
         <button class="btn" id="exportJsonl">Export JSONL</button>
       </div>
-    </div>
+      </div>
 
-    <div class="card" style="margin-top:8px">
+      <div class="card" style="margin-top:8px">
       <div class="status" id="status">
         <div><span id="fname">No file loaded</span> <span id="meta"></span> <span id="warn" style="color:#b91c1c"></span></div>
         <div>
           <button class="btn" id="prev">Prev</button>
-          <span class="pill" id="pageInfo">Page 1 / 1</span>
+          <span class="pill" id="pageControls">Page
+            <input id="pageInput" type="number" min="1" value="1" style="width:64px; margin:0 6px; padding:2px 6px; border:1px solid var(--bord); border-radius:8px;">
+            / <span id="pagesTotal">1</span>
+          </span>
           <button class="btn" id="next">Next</button>
         </div>
       </div>
@@ -110,6 +116,19 @@
           <tbody id="tbody"></tbody>
         </table>
       </div>
+
+    <!-- Paste Input -->
+    <div class="card" style="margin-top:12px; padding:12px">
+      <div class="row wrap" style="align-items:center; gap:8px; margin-bottom:8px">
+        <div class="muted">Paste data:</div>
+        <select id="textFormat" style="max-width:140px">
+          <option value="jsonl" selected>JSONL</option>
+          <option value="csv">CSV/TSV</option>
+        </select>
+        <button class="btn" id="loadText">Load From Text</button>
+      </div>
+      <textarea id="paste" rows="6" placeholder="Paste JSONL (one JSON object per line) or CSV rows here" style="width:100%; border:1px solid var(--bord); border-radius:12px; padding:8px 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace;"></textarea>
+    </div>
     </div>
   </div>
 
@@ -137,11 +156,14 @@
       const exportCsvBtn = $("exportCsv");
       const exportJsonlBtn = $("exportJsonl");
       const tableEl = $("table");
+      const searchFieldSel = $("searchField");
       const prevBtn = $("prev");
       const nextBtn = $("next");
       const thead = $("thead");
       const tbody = $("tbody");
       const pageInfo = $("pageInfo");
+      const pageInput = $("pageInput");
+      const pagesTotal = $("pagesTotal");
       const fname = $("fname");
       const meta = $("meta");
       const warn = $("warn");
@@ -156,6 +178,9 @@
         return el;
       })();
       const containerEl = document.querySelector('.container');
+      const pasteTA = $("paste");
+      const loadTextBtn = $("loadText");
+      const textFormatSel = $("textFormat");
 
       let fileName = null;
       let rows = [];           // all parsed rows
@@ -225,6 +250,7 @@
 
         thead.appendChild(tr);
         applyOverflow();
+        rebuildSearchField();
       }
 
       function makeResizer(colIndex) {
@@ -355,7 +381,12 @@
       function applyFilter() {
         const q = search.value.trim().toLowerCase();
         if (!q) { filtered = rows; return; }
-        filtered = rows.filter(r => columns.some(c => String(safeCell(r, c)).toLowerCase().includes(q)));
+        const field = (searchFieldSel && searchFieldSel.value) || '*';
+        if (field === '*') {
+          filtered = rows.filter(r => columns.some(c => String(safeCell(r, c)).toLowerCase().includes(q)));
+        } else {
+          filtered = rows.filter(r => String(safeCell(r, field)).toLowerCase().includes(q));
+        }
       }
 
       function renderPage() {
@@ -403,7 +434,12 @@
 
         tbody.appendChild(frag);
 
-        pageInfo.textContent = `Page ${page} / ${pages}`;
+        if (pageInput) {
+          pageInput.min = 1;
+          pageInput.max = pages;
+          pageInput.value = String(page);
+        }
+        if (pagesTotal) pagesTotal.textContent = String(pages);
         prevBtn.disabled = page <= 1;
         nextBtn.disabled = page >= pages;
 
@@ -469,6 +505,18 @@
         return parseJSONLFile(file);
       }
 
+      function rebuildSearchField() {
+        if (!searchFieldSel) return;
+        const current = searchFieldSel.value || '*';
+        const opts = ['<option value="*">All fields</option>']
+          .concat(columns.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`));
+        searchFieldSel.innerHTML = opts.join('');
+        const to = columns.includes(current) || current === '*' ? current : '*';
+        searchFieldSel.value = to;
+      }
+
+      function escapeHtml(s) { return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch])); }
+
       // Parsing - JSONL
       async function parseJSONLFile(file) {
         parsing = true; hadInvalid = false; loaded = 0; rows = []; filtered = []; columns = []; page = 1;
@@ -499,6 +547,26 @@
         }
 
         // Final refresh
+        applyFilter(); renderPage(); parsing = false; renderPage();
+      }
+
+      // Parse from pasted JSONL text
+      async function parseJSONLText(text) {
+        parsing = true; hadInvalid = false; loaded = 0; rows = []; filtered = []; columns = []; page = 1;
+        currentFormat = 'jsonl';
+        setFileName('(pasted JSONL)');
+        rebuildHeader(); renderPage();
+        const colSet = new Set();
+        const pushRow = (obj) => {
+          rows.push(obj); loaded++;
+          for (const k of Object.keys(obj)) colSet.add(k);
+          const nextCols = Array.from(colSet);
+          if (nextCols.length !== columns.length || nextCols.some((c, i) => c !== columns[i])) {
+            columns = nextCols; loadPersistedWidths(); rebuildHeader();
+          }
+          if (loaded % 500 === 0) { applyFilter(); renderPageDebounced(); }
+        };
+        String(text || '').split(/\r?\n/).forEach(line => parseLine(line, pushRow));
         applyFilter(); renderPage(); parsing = false; renderPage();
       }
 
@@ -591,6 +659,32 @@
         applyFilter(); renderPage(); parsing = false; renderPage();
       }
 
+      // Parse from pasted CSV text
+      async function parseCSVText(text) {
+        parsing = true; hadInvalid = false; loaded = 0; rows = []; filtered = []; columns = []; page = 1;
+        currentFormat = 'csv';
+        setFileName('(pasted CSV)');
+        rebuildHeader(); renderPage();
+        try {
+          const raw = String(text || '');
+          const { rows: arrRows } = parseCSVToArrays(raw);
+          if (!arrRows.length) { parsing = false; applyFilter(); renderPage(); return; }
+          arrRows[0][0] = (arrRows[0][0] || '').replace(/^\uFEFF/, '');
+          const header = arrRows[0].map((h, i) => (h && h.trim()) || `col${i+1}`);
+          const seen = new Map();
+          columns = header.map((h) => { const n = (seen.get(h) || 0) + 1; seen.set(h, n); return n === 1 ? h : `${h}.${n}`; });
+          loadPersistedWidths(); rebuildHeader();
+          for (let r = 1; r < arrRows.length; r++) {
+            const rowArr = arrRows[r];
+            if (rowArr.length === 1 && rowArr[0] === '') continue;
+            if (rowArr.length > columns.length) { for (let i = columns.length; i < rowArr.length; i++) columns.push(`col${i+1}`); rebuildHeader(); }
+            const obj = {}; for (let i = 0; i < columns.length; i++) obj[columns[i]] = rowArr[i] ?? '';
+            rows.push(obj); loaded++; if (loaded % 500 === 0) { applyFilter(); renderPageDebounced(); }
+          }
+        } catch (e) { console.error(e); hadInvalid = true; }
+        applyFilter(); renderPage(); parsing = false; renderPage();
+      }
+
       function parseCSVToArrays(text) {
         // Auto-detect delimiter among comma, tab, semicolon using first non-empty line
         const firstLine = (() => {
@@ -654,8 +748,35 @@
         });
       }
 
+      if (searchFieldSel) {
+        searchFieldSel.addEventListener('change', () => { page = 1; applyFilter(); renderPage(); });
+      }
+
+      if (loadTextBtn) {
+        loadTextBtn.addEventListener('click', () => {
+          const fmt = (textFormatSel && textFormatSel.value) || 'jsonl';
+          const t = pasteTA && pasteTA.value || '';
+          if (!t.trim()) return;
+          if (fmt === 'csv') parseCSVText(t); else parseJSONLText(t);
+        });
+      }
+
       prevBtn.onclick = () => { if (page > 1) { page--; renderPage(); } };
       nextBtn.onclick = () => { page++; renderPage(); };
+
+      function gotoPage(n) {
+        const pageSize = parseInt(pageSizeSel.value, 10);
+        const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+        const clamped = Math.max(1, Math.min(pages, Number(n) || 1));
+        page = clamped; renderPage();
+      }
+
+      if (pageInput) {
+        pageInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); gotoPage(pageInput.value); }
+        });
+        pageInput.addEventListener('change', () => gotoPage(pageInput.value));
+      }
 
       search.addEventListener('input', debounce(() => { page = 1; applyFilter(); renderPage(); }, 200));
       pageSizeSel.addEventListener('change', () => { page = 1; renderPage(); });
