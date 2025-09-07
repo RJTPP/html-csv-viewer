@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>JSONL/CSV Table Viewer (Resizable Columns)</title>
+<style>
+  :root { --bg:#f7f7f8; --card:#fff; --ink:#111; --muted:#666; --bord:#e5e7eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color:var(--ink); background:var(--bg); }
+  .container { max-width: 1200px; margin: 24px auto; padding: 0 16px; }
+  .h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .muted { color: var(--muted); }
+  .card { background:var(--card); border:1px solid var(--bord); border-radius:16px; }
+  .drop { padding:16px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .btn { appearance:none; border:1px solid var(--bord); background:#fff; color:#111; border-radius:12px; padding:8px 12px; cursor:pointer; }
+  .btn[disabled] { opacity:.5; cursor:default; }
+  .btn.primary { background:#111; color:#fff; border-color:#111; }
+  .row { display:flex; gap:8px; }
+  .row.wrap { flex-wrap:wrap; }
+  .grow { flex:1 1 auto; }
+  input[type="text"], select { width:100%; border:1px solid var(--bord); border-radius:12px; padding:8px 10px; background:#fff; }
+  .toolbar { display:grid; grid-template-columns: 1fr auto; gap:8px; margin-top:12px; }
+  .toolbar .right { display:flex; gap:8px; justify-content:flex-end; }
+  .status { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; color:var(--muted); }
+  .tableWrap { overflow:auto; border-top:1px solid var(--bord); border-bottom-left-radius:16px; border-bottom-right-radius:16px; }
+
+  /* Table + resizable columns */
+  table { width:100%; border-collapse: collapse; font-size:13px; table-layout: fixed; }
+  thead th { position: sticky; top: 0; background:#f3f4f6; text-align:left; border-bottom:1px solid var(--bord); padding:8px 10px; white-space:nowrap; }
+  tbody td { border-top:1px solid var(--bord); padding:8px 10px; vertical-align: top; }
+  tbody tr:nth-child(even) { background:#fafafa; }
+  .idx { width:64px; color:#888; }
+  .cell { white-space: pre-wrap; word-break: break-word; }
+  .truncate { display:inline; }
+  .cellActions { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+  .pill { display:inline-block; padding:2px 8px; border:1px solid var(--bord); border-radius:999px; font-size:12px; background:#fff; }
+  .center { text-align:center; color:var(--muted); padding:24px; }
+  .stickyHead { border-top-left-radius:16px; border-top-right-radius:16px; overflow:hidden; }
+
+  /* Resizer handle */
+  thead th { position: sticky; top: 0; }
+  thead th .resizer {
+    position: absolute;
+    top: 0; right: -3px;
+    width: 6px; height: 100%;
+    cursor: col-resize;
+    user-select: none;
+  }
+  .noselect { user-select: none !important; }
+
+  /* Modal */
+  .modalBack { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center; justify-content:center; padding:16px; }
+  .modal { background:#fff; border-radius:16px; max-width: 900px; width:100%; max-height:80vh; display:flex; flex-direction:column; overflow:hidden; }
+  .modalHead { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid var(--bord); }
+  .modalBody { padding:12px; overflow:auto; white-space: pre-wrap; word-break: break-word; font-size:13px; }
+</style>
+</head>
+<body>
+  <div class="container">
+    <div class="h1">JSONL/CSV Table Viewer</div>
+    <div class="muted">Single HTML file. Works offline. Optimized for very long text fields (LLM responses). Drag headers to resize columns; double-click a handle to auto-fit the current page.</div>
+
+    <div class="card drop" id="drop">
+      <div>
+        <div><strong>Drop</strong> a .jsonl or .csv here</div>
+        <div class="muted" style="font-size:12px">or choose a file below</div>
+      </div>
+      <label class="btn primary">
+        Browse
+        <input id="file" type="file" accept=".jsonl,.ndjson,.json,.csv,.tsv" hidden>
+      </label>
+    </div>
+
+    <div class="toolbar">
+      <div class="row">
+        <input id="search" type="text" placeholder="Filter rows (case-insensitive)">
+        <select id="pagesize" style="max-width:140px">
+          <option>10</option>
+          <option selected>25</option>
+          <option>50</option>
+          <option>100</option>
+          <option>200</option>
+          <option>500</option>
+        </select>
+      </div>
+      <div class="right">
+        <button class="btn" id="exportCsv">Export CSV</button>
+        <button class="btn" id="exportJsonl">Export JSONL</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:8px">
+      <div class="status" id="status">
+        <div><span id="fname">No file loaded</span> <span id="meta"></span> <span id="warn" style="color:#b91c1c"></span></div>
+        <div>
+          <button class="btn" id="prev">Prev</button>
+          <span class="pill" id="pageInfo">Page 1 / 1</span>
+          <button class="btn" id="next">Next</button>
+        </div>
+      </div>
+      <div class="tableWrap" id="tableWrap">
+        <table id="table">
+          <colgroup id="colgroup"></colgroup>
+          <thead id="thead"></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modalBack" class="modalBack" style="display:none">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modalHead">
+        <div id="modalTitle" style="min-width:0; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap"></div>
+        <div class="row">
+          <button class="btn" id="copyModal">Copy</button>
+          <button class="btn primary" id="closeModal">Close</button>
+        </div>
+      </div>
+      <div id="modalBody" class="modalBody"></div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const $ = (id) => document.getElementById(id);
+      const fileInput = $("file");
+      const drop = $("drop");
+      const search = $("search");
+      const pageSizeSel = $("pagesize");
+      const exportCsvBtn = $("exportCsv");
+      const exportJsonlBtn = $("exportJsonl");
+      const prevBtn = $("prev");
+      const nextBtn = $("next");
+      const thead = $("thead");
+      const tbody = $("tbody");
+      const pageInfo = $("pageInfo");
+      const fname = $("fname");
+      const meta = $("meta");
+      const warn = $("warn");
+      const modalBack = $("modalBack");
+      const modalTitle = $("modalTitle");
+      const modalBody = $("modalBody");
+      const copyModal = $("copyModal");
+      const closeModal = $("closeModal");
+      const colgroup = $("colgroup");
+
+      let fileName = null;
+      let rows = [];           // all parsed rows
+      let filtered = [];       // after search
+      let columns = [];        // union of keys
+      let page = 1;
+      let loaded = 0;
+      let parsing = false;
+      let hadInvalid = false;
+      let currentFormat = "jsonl"; // 'jsonl' | 'csv'
+
+      // Resizing state
+      let colWidths = [];               // pixel widths for [#] + columns
+      const MIN_COL_WIDTH = 60;         // px
+      const MAX_COL_WIDTH = 800;        // px
+
+      function escCsv(s) { return '"' + String(s).replaceAll('"', '""') + '"'; }
+      function safeCell(obj, key) {
+        const v = obj && obj[key];
+        if (v == null) return "";
+        if (typeof v === 'string') return v;
+        try { return JSON.stringify(v); } catch { return String(v); }
+      }
+      function truncate(s, n = 1000) { return s.length <= n ? s : s.slice(0, n) + '…'; }
+      function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+      function rebuildHeader() {
+        // Ensure colWidths length matches columns (index + data columns)
+        const needed = 1 + columns.length;
+        if (colWidths.length !== needed) {
+          const prev = colWidths;
+          colWidths = Array(needed).fill("");
+          for (let i = 0; i < Math.min(prev.length, needed); i++) colWidths[i] = prev[i];
+          // Default index width if empty
+          if (!colWidths[0]) colWidths[0] = 64;
+        }
+
+        // Build/refresh <colgroup>
+        colgroup.innerHTML = "";
+        for (let i = 0; i < needed; i++) {
+          const col = document.createElement("col");
+          if (colWidths[i]) col.style.width = colWidths[i] + "px";
+          colgroup.appendChild(col);
+        }
+
+        // Build header row with resizers
+        thead.innerHTML = "";
+        const tr = document.createElement("tr");
+
+        const thIdx = document.createElement("th");
+        thIdx.textContent = "#";
+        thIdx.className = "idx";
+        thIdx.dataset.colIndex = "0";
+        thIdx.style.position = "relative";
+        thIdx.appendChild(makeResizer(0));
+        tr.appendChild(thIdx);
+
+        columns.forEach((c, i) => {
+          const th = document.createElement("th");
+          th.textContent = c;
+          th.dataset.colIndex = String(i + 1);
+          th.style.position = "relative";
+          th.appendChild(makeResizer(i + 1));
+          tr.appendChild(th);
+        });
+
+        thead.appendChild(tr);
+      }
+
+      function makeResizer(colIndex) {
+        const handle = document.createElement("span");
+        handle.className = "resizer";
+        handle.title = "Drag to resize. Double-click to auto-fit.";
+        handle.addEventListener("mousedown", (e) => startResize(e, colIndex));
+        handle.addEventListener("dblclick", (e) => { e.preventDefault(); autoFit(colIndex); });
+        return handle;
+      }
+
+      function startResize(e, colIndex) {
+        e.preventDefault();
+        const startX = e.clientX;
+        const colEl = colgroup.children[colIndex];
+        const thEl = thead.querySelector(`th[data-col-index="${colIndex}"]`);
+        const startWidth = getCurrentWidthPx(colIndex);
+
+        document.body.classList.add("noselect");
+
+        const onMove = (ev) => {
+          const dx = ev.clientX - startX;
+          const next = Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, startWidth + dx));
+          colWidths[colIndex] = next;
+          if (colEl) colEl.style.width = next + "px";
+          if (thEl) thEl.style.width = next + "px";
+        };
+
+        const onUp = () => {
+          document.removeEventListener("mousemove", onMove);
+          document.removeEventListener("mouseup", onUp);
+          document.body.classList.remove("noselect");
+          renderPageDebounced(); // reflow rows if necessary
+          persistWidths();
+        };
+
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+      }
+
+      function getCurrentWidthPx(colIndex) {
+        if (colWidths[colIndex]) return colWidths[colIndex];
+        const th = thead.querySelector(`th[data-col-index="${colIndex}"]`);
+        return Math.max(MIN_COL_WIDTH, th ? th.getBoundingClientRect().width : MIN_COL_WIDTH);
+      }
+
+      // Auto-fit width to header + visible rows on the current page
+      function autoFit(colIndex) {
+        const pageSize = parseInt(pageSizeSel.value, 10);
+        const start = (page - 1) * pageSize;
+        const slice = filtered.slice(start, start + pageSize);
+
+        const ctx = autoFit.measureCtx || (autoFit.measureCtx = document.createElement("canvas").getContext("2d"));
+        const bodyStyle = getComputedStyle(document.body);
+        ctx.font = `${bodyStyle.fontSize} ${bodyStyle.fontFamily}`;
+
+        const header = colIndex === 0 ? "#" : columns[colIndex - 1];
+        let maxPx = textPx(header, ctx) + 24; // padding for cell
+
+        const key = colIndex === 0 ? null : columns[colIndex - 1];
+        for (const r of slice) {
+          const val = colIndex === 0 ? String(0) : String(safeCell(r, key));
+          const sample = val.length > 200 ? val.slice(0, 200) + "…" : val;
+          maxPx = Math.max(maxPx, textPx(sample, ctx) + 24);
+        }
+
+        maxPx = Math.max(MIN_COL_WIDTH, Math.min(maxPx, MAX_COL_WIDTH));
+        colWidths[colIndex] = maxPx;
+        if (colgroup.children[colIndex]) colgroup.children[colIndex].style.width = maxPx + "px";
+        const thEl = thead.querySelector(`th[data-col-index="${colIndex}"]`);
+        if (thEl) thEl.style.width = maxPx + "px";
+        renderPageDebounced();
+        persistWidths();
+      }
+
+      function textPx(s, ctx) { return ctx.measureText(s).width; }
+
+      function applyFilter() {
+        const q = search.value.trim().toLowerCase();
+        if (!q) { filtered = rows; return; }
+        filtered = rows.filter(r => columns.some(c => String(safeCell(r, c)).toLowerCase().includes(q)));
+      }
+
+      function renderPage() {
+        const pageSize = parseInt(pageSizeSel.value, 10);
+        const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+        if (page > pages) page = pages;
+        const start = (page - 1) * pageSize;
+        const slice = filtered.slice(start, start + pageSize);
+
+        tbody.innerHTML = '';
+        const frag = document.createDocumentFragment();
+
+        if (slice.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = columns.length + 1;
+          td.className = 'center';
+          td.textContent = parsing ? 'Loading…' : 'No rows to display';
+          tr.appendChild(td); frag.appendChild(tr);
+        } else {
+          slice.forEach((r, i) => {
+            const tr = document.createElement('tr');
+            const tdIdx = document.createElement('td'); tdIdx.className = 'idx'; tdIdx.textContent = String(start + i + 1); tr.appendChild(tdIdx);
+            columns.forEach((c) => {
+              const td = document.createElement('td');
+              td.className = 'cell';
+              const raw = String(safeCell(r, c));
+              if (raw.length > 160) {
+                const span = document.createElement('span'); span.textContent = truncate(raw);
+                const actions = document.createElement('div'); actions.className = 'cellActions';
+                const btnOpen = document.createElement('button'); btnOpen.className = 'btn primary'; btnOpen.textContent = 'Expand';
+                const btnCopy = document.createElement('button'); btnCopy.className = 'btn'; btnCopy.textContent = 'Copy';
+                btnOpen.onclick = () => openModal(c, raw);
+                btnCopy.onclick = () => navigator.clipboard.writeText(raw);
+                actions.appendChild(btnOpen); actions.appendChild(btnCopy);
+                td.appendChild(span); td.appendChild(actions);
+              } else {
+                td.textContent = raw;
+              }
+              tr.appendChild(td);
+            });
+            frag.appendChild(tr);
+          });
+        }
+
+        tbody.appendChild(frag);
+
+        pageInfo.textContent = `Page ${page} / ${pages}`;
+        prevBtn.disabled = page <= 1;
+        nextBtn.disabled = page >= pages;
+
+        const extras = [];
+        if (fileName) extras.push('• ' + loaded.toLocaleString() + ' lines loaded');
+        if (parsing) extras.push('(streaming…)');
+        meta.textContent = extras.length ? ' ' + extras.join(' ') : '';
+        warn.textContent = hadInvalid ? 'Some lines could not be parsed and were skipped.' : '';
+      }
+
+      const renderPageDebounced = debounce(renderPage, 16);
+
+      function setFileName(name) { fileName = name; fname.textContent = name || 'No file loaded'; }
+
+      function openModal(title, text) {
+        modalTitle.textContent = title;
+        modalBody.textContent = text;
+        modalBack.style.display = 'flex';
+      }
+      function closeModalFn() { modalBack.style.display = 'none'; }
+
+      copyModal.onclick = () => navigator.clipboard.writeText(modalBody.textContent || '');
+      closeModal.onclick = closeModalFn;
+      modalBack.addEventListener('click', (e) => { if (e.target === modalBack) closeModalFn(); });
+
+      // Persistence of widths (per file)
+      function persistKey() { return fileName ? `jsonl_viewer_widths:${fileName}` : null; }
+      function persistWidths() {
+        const key = persistKey();
+        if (!key) return;
+        try { localStorage.setItem(key, JSON.stringify(colWidths)); } catch {}
+      }
+      function loadPersistedWidths() {
+        const key = persistKey();
+        if (!key) return;
+        try {
+          const v = localStorage.getItem(key);
+          if (!v) return;
+          const arr = JSON.parse(v);
+          if (Array.isArray(arr)) colWidths = arr.slice(0, 1 + columns.length);
+        } catch {}
+      }
+
+      // Parsing entry
+      async function parseFile(file) {
+        const name = (file && file.name || '').toLowerCase();
+        if (name.endsWith('.csv') || name.endsWith('.tsv')) {
+          return parseCSVFile(file);
+        }
+        // Default: JSONL/NDJSON/JSON
+        return parseJSONLFile(file);
+      }
+
+      // Parsing - JSONL
+      async function parseJSONLFile(file) {
+        parsing = true; hadInvalid = false; loaded = 0; rows = []; filtered = []; columns = []; page = 1;
+        currentFormat = 'jsonl';
+        setFileName(file.name);
+        rebuildHeader(); renderPage();
+
+        const colSet = new Set();
+        const pushRow = (obj) => {
+          rows.push(obj); loaded++;
+          for (const k of Object.keys(obj)) colSet.add(k);
+          // update header if new columns discovered
+          const nextCols = Array.from(colSet);
+          if (nextCols.length !== columns.length || nextCols.some((c, i) => c !== columns[i])) {
+            columns = nextCols;
+            loadPersistedWidths();  // attempt to restore widths for this file
+            rebuildHeader();
+          }
+          // incremental UI: recalc filter only every ~500 rows to keep snappy
+          if (loaded % 500 === 0) { applyFilter(); renderPageDebounced(); }
+        };
+
+        // Try stream API first, fallback to FileReader
+        if (file.stream && typeof file.stream === 'function') {
+          await streamParse(file, pushRow).catch(e => { console.error(e); hadInvalid = hadInvalid || false; });
+        } else {
+          await filereaderParse(file, pushRow).catch(e => console.error(e));
+        }
+
+        // Final refresh
+        applyFilter(); renderPage(); parsing = false; renderPage();
+      }
+
+      async function streamParse(file, pushRow) {
+        const reader = file.stream().getReader();
+        const decoder = new TextDecoder();
+        let { value, done } = await reader.read();
+        let buf = '';
+        while (!done) {
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split(/\r?\n/);
+          buf = parts.pop() || '';
+          for (const line of parts) { parseLine(line, pushRow); }
+          ({ value, done } = await reader.read());
+        }
+        buf += decoder.decode();
+        if (buf) { for (const line of buf.split(/\r?\n/)) parseLine(line, pushRow); }
+      }
+
+      async function filereaderParse(file, pushRow) {
+        const text = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onerror = () => rej(r.error);
+          r.onload = () => res(r.result);
+          r.readAsText(file);
+        });
+        const lines = String(text).split(/\r?\n/);
+        for (const line of lines) { parseLine(line, pushRow); }
+      }
+
+      function parseLine(line, pushRow) {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        try { const obj = JSON.parse(trimmed); pushRow(obj); }
+        catch { hadInvalid = true; }
+      }
+
+      // CSV parsing (basic RFC 4180 handling, delimiter auto-detect)
+      async function parseCSVFile(file) {
+        parsing = true; hadInvalid = false; loaded = 0; rows = []; filtered = []; columns = []; page = 1;
+        currentFormat = 'csv';
+        setFileName(file.name);
+        rebuildHeader(); renderPage();
+
+        try {
+          const text = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onerror = () => rej(r.error);
+            r.onload = () => res(r.result);
+            r.readAsText(file);
+          });
+
+          const raw = String(text || '');
+          const { rows: arrRows, delim } = parseCSVToArrays(raw);
+          if (!arrRows.length) {
+            parsing = false; applyFilter(); renderPage(); return;
+          }
+
+          // Handle BOM in first header cell
+          arrRows[0][0] = arrRows[0][0].replace(/^\uFEFF/, '');
+
+          // Initialize columns from header
+          const header = arrRows[0].map((h, i) => (h && h.trim()) || `col${i+1}`);
+          const seen = new Map();
+          columns = header.map((h) => {
+            const n = (seen.get(h) || 0) + 1; seen.set(h, n);
+            return n === 1 ? h : `${h}.${n}`; // disambiguate dup headers
+          });
+          loadPersistedWidths();
+          rebuildHeader();
+
+          // Convert remaining rows to objects
+          for (let r = 1; r < arrRows.length; r++) {
+            const rowArr = arrRows[r];
+            if (rowArr.length === 1 && rowArr[0] === '') continue; // skip blank lines
+            // Extend columns if this row has more fields
+            if (rowArr.length > columns.length) {
+              for (let i = columns.length; i < rowArr.length; i++) columns.push(`col${i+1}`);
+              rebuildHeader();
+            }
+            const obj = {};
+            for (let i = 0; i < columns.length; i++) obj[columns[i]] = rowArr[i] ?? '';
+            rows.push(obj); loaded++;
+            if (loaded % 500 === 0) { applyFilter(); renderPageDebounced(); }
+          }
+        } catch (e) {
+          console.error(e); hadInvalid = true;
+        }
+
+        applyFilter(); renderPage(); parsing = false; renderPage();
+      }
+
+      function parseCSVToArrays(text) {
+        // Auto-detect delimiter among comma, tab, semicolon using first non-empty line
+        const firstLine = (() => {
+          for (const line of String(text).split(/\r?\n/)) { if (line.trim() !== '') return line; }
+          return '';
+        })();
+        const cand = [',', '\t', ';'];
+        const counts = cand.map(d => countDelimsOutsideQuotes(firstLine, d));
+        let delim = ',';
+        let max = -1; for (let i = 0; i < counts.length; i++) if (counts[i] > max) { max = counts[i]; delim = cand[i]; }
+
+        const rows = [];
+        let cur = '';
+        let row = [];
+        let inQuotes = false;
+        for (let i = 0; i < text.length; i++) {
+          const ch = text[i];
+          const next = text[i+1];
+          if (inQuotes) {
+            if (ch === '"') {
+              if (next === '"') { cur += '"'; i++; } // escaped quote
+              else { inQuotes = false; }
+            } else { cur += ch; }
+          } else {
+            if (ch === '"') { inQuotes = true; }
+            else if (ch === delim) { row.push(cur); cur = ''; }
+            else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+            else if (ch === '\r') { /* ignore */ }
+            else { cur += ch; }
+          }
+        }
+        // flush last field/row
+        row.push(cur); rows.push(row);
+        return { rows, delim };
+      }
+
+      function countDelimsOutsideQuotes(s, d) {
+        let c = 0; let inQ = false;
+        for (let i = 0; i < s.length; i++) {
+          const ch = s[i]; const next = s[i+1];
+          if (inQ) { if (ch === '"') { if (next === '"') { i++; } else { inQ = false; } } }
+          else { if (ch === '"') inQ = true; else if (ch === d) c++; }
+        }
+        return c;
+      }
+
+      // Events
+      fileInput.addEventListener('change', (e) => {
+        const f = e.target.files && e.target.files[0]; if (f) parseFile(f);
+      });
+
+      drop.addEventListener('dragover', (e) => { e.preventDefault(); });
+      drop.addEventListener('drop', (e) => { e.preventDefault(); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) parseFile(f); });
+
+      prevBtn.onclick = () => { if (page > 1) { page--; renderPage(); } };
+      nextBtn.onclick = () => { page++; renderPage(); };
+
+      search.addEventListener('input', debounce(() => { page = 1; applyFilter(); renderPage(); }, 200));
+      pageSizeSel.addEventListener('change', () => { page = 1; renderPage(); });
+
+      exportCsvBtn.onclick = () => {
+        if (!columns.length) return;
+        const header = columns.map(escCsv).join(',');
+        const q = search.value.trim().toLowerCase();
+        const src = q ? filtered : rows; // export filtered if searching
+        const lines = [header];
+        for (const r of src) { lines.push(columns.map(c => escCsv(safeCell(r, c))).join(',')); }
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (fileName ? fileName.replace(/\.[^/.]+$/, '') : 'data') + (q ? '_filtered' : '') + '.csv';
+        a.click();
+      };
+
+      exportJsonlBtn.onclick = () => {
+        const q = search.value.trim().toLowerCase();
+        const src = q ? filtered : rows;
+        const blob = new Blob([src.map(r => JSON.stringify(r)).join('\n')], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (fileName ? fileName.replace(/\.[^/.]+$/, '') : 'data') + (q ? '_filtered' : '') + '.jsonl';
+        a.click();
+      };
+    })();
+  </script>
+</body>
+</html>
