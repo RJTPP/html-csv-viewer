@@ -1,5 +1,7 @@
 # 📋 CSV/JSONL Table Viewer
 
+[▶ Live Demo](https://rjtpp.github.io/html-table-viewer/)
+
 
 A single-file, zero-dependency **viewer** for `.csv`, `.tsv`, `.jsonl`, `.ndjson`, and line-based `.json`.  
 Works fully **offline**, supports **resizable columns**, **filtering**, **pagination**, **paste-to-load**, and **export**.
@@ -15,7 +17,7 @@ Works fully **offline**, supports **resizable columns**, **filtering**, **pagina
 - Export filtered/full data as CSV or JSONL  
 - Paste modal for raw CSV/JSONL text  
 
-## Usage
+## 🛠️ Usage
 1. Save as `index.html`.
 2. Open in a modern browser (Chrome/Edge/Firefox/Safari).
 3. Load data by:
@@ -23,14 +25,14 @@ Works fully **offline**, supports **resizable columns**, **filtering**, **pagina
    - **Browse** button  
    - **Paste Data** modal  
 
-## Tips
+## 💡 Tips
 - Double-click column resizer = auto-fit  
 - Search + Export = export filtered data  
 - Column widths & overflow setting are saved in `localStorage`  
 
-## Privacy
+## 🔒 Privacy
 - 100% client-side, no network calls.  
 
-## License
+## 📄 License
 
 This project is released under the [MIT License](LICENSE).
