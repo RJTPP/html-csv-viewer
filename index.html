@@ -29,6 +29,7 @@
   table { width:100%; border-collapse: collapse; font-size:13px; table-layout: fixed; }
   thead th { position: sticky; top: 0; background:#f3f4f6; text-align:left; border-bottom:1px solid var(--bord); padding:8px 10px; white-space:nowrap; }
   tbody td { border-top:1px solid var(--bord); padding:8px 10px; vertical-align: top; }
+  thead th + th, tbody td + td { border-left:1px solid var(--bord); }
   tbody tr:nth-child(even) { background:#fafafa; }
   .idx { width:64px; color:#888; }
   .cell { white-space: pre-wrap; word-break: break-word; }
@@ -85,6 +86,9 @@
         </select>
       </div>
       <div class="right">
+        <label class="btn" title="Allow table to exceed page width">
+          <input id="overflowToggle" type="checkbox" style="margin-right:6px"> Expand
+        </label>
         <button class="btn" id="exportCsv">Export CSV</button>
         <button class="btn" id="exportJsonl">Export JSONL</button>
       </div>
@@ -132,6 +136,7 @@
       const pageSizeSel = $("pagesize");
       const exportCsvBtn = $("exportCsv");
       const exportJsonlBtn = $("exportJsonl");
+      const tableEl = $("table");
       const prevBtn = $("prev");
       const nextBtn = $("next");
       const thead = $("thead");
@@ -146,6 +151,11 @@
       const copyModal = $("copyModal");
       const closeModal = $("closeModal");
       const colgroup = $("colgroup");
+      const overflowToggle = (() => {
+        const el = document.getElementById("overflowToggle");
+        return el;
+      })();
+      const containerEl = document.querySelector('.container');
 
       let fileName = null;
       let rows = [];           // all parsed rows
@@ -155,6 +165,7 @@
       let loaded = 0;
       let parsing = false;
       let hadInvalid = false;
+      let overflowWide = false; // when true, table can exceed container width
       let currentFormat = "jsonl"; // 'jsonl' | 'csv'
 
       // Resizing state
@@ -213,6 +224,7 @@
         });
 
         thead.appendChild(tr);
+        applyOverflow();
       }
 
       function makeResizer(colIndex) {
@@ -247,6 +259,7 @@
           document.body.classList.remove("noselect");
           renderPageDebounced(); // reflow rows if necessary
           persistWidths();
+          applyOverflow();
         };
 
         document.addEventListener("mousemove", onMove);
@@ -286,9 +299,58 @@
         if (thEl) thEl.style.width = maxPx + "px";
         renderPageDebounced();
         persistWidths();
+        applyOverflow();
       }
 
       function textPx(s, ctx) { return ctx.measureText(s).width; }
+
+      function ensureColWidths() {
+        const needed = 1 + columns.length;
+        if (colWidths.length !== needed) {
+          const prev = colWidths;
+          colWidths = Array(needed).fill("");
+          for (let i = 0; i < Math.min(prev.length, needed); i++) colWidths[i] = prev[i];
+          if (!colWidths[0]) colWidths[0] = 64;
+        }
+        // Fill missing widths with header-based defaults
+        const ctx = ensureColWidths._ctx || (ensureColWidths._ctx = document.createElement("canvas").getContext("2d"));
+        const bodyStyle = getComputedStyle(document.body);
+        ctx.font = `${bodyStyle.fontSize} ${bodyStyle.fontFamily}`;
+        if (!colWidths[0]) colWidths[0] = 64;
+        for (let i = 1; i < 1 + columns.length; i++) {
+          if (!colWidths[i]) {
+            const header = columns[i - 1] || '';
+            const px = Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, Math.ceil(textPx(header, ctx) + 24)));
+            colWidths[i] = px;
+          }
+        }
+      }
+
+      function sumColumnWidths() {
+        ensureColWidths();
+        let sum = 0;
+        for (let i = 0; i < 1 + columns.length; i++) sum += Number(colWidths[i] || MIN_COL_WIDTH);
+        return sum;
+      }
+
+      function applyOverflow() {
+        if (overflowWide) {
+          ensureColWidths();
+          // Apply widths to colgroup if missing
+          for (let i = 0; i < colgroup.children.length; i++) {
+            const w = colWidths[i];
+            if (w) colgroup.children[i].style.width = w + 'px';
+          }
+          const total = sumColumnWidths();
+          tableEl.style.minWidth = total + 'px';
+          tableEl.style.width = 'auto';
+          if (containerEl) containerEl.style.maxWidth = 'none';
+        } else {
+          tableEl.style.minWidth = '';
+          tableEl.style.width = '100%';
+          if (containerEl) containerEl.style.maxWidth = '';
+        }
+      }
 
       function applyFilter() {
         const q = search.value.trim().toLowerCase();
@@ -369,6 +431,7 @@
 
       // Persistence of widths (per file)
       function persistKey() { return fileName ? `jsonl_viewer_widths:${fileName}` : null; }
+      function persistOverflowKey() { return 'jsonl_viewer_overflow'; }
       function persistWidths() {
         const key = persistKey();
         if (!key) return;
@@ -383,6 +446,17 @@
           const arr = JSON.parse(v);
           if (Array.isArray(arr)) colWidths = arr.slice(0, 1 + columns.length);
         } catch {}
+      }
+      function loadPersistedOverflow() {
+        try {
+          const v = localStorage.getItem(persistOverflowKey());
+          if (v === '1') overflowWide = true; else if (v === '0') overflowWide = false;
+        } catch {}
+        if (overflowToggle) overflowToggle.checked = !!overflowWide;
+        applyOverflow();
+      }
+      function persistOverflow() {
+        try { localStorage.setItem(persistOverflowKey(), overflowWide ? '1' : '0'); } catch {}
       }
 
       // Parsing entry
@@ -570,6 +644,15 @@
 
       drop.addEventListener('dragover', (e) => { e.preventDefault(); });
       drop.addEventListener('drop', (e) => { e.preventDefault(); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) parseFile(f); });
+
+      if (overflowToggle) {
+        loadPersistedOverflow();
+        overflowToggle.addEventListener('change', () => {
+          overflowWide = !!overflowToggle.checked;
+          applyOverflow();
+          persistOverflow();
+        });
+      }
 
       prevBtn.onclick = () => { if (page > 1) { page--; renderPage(); } };
       nextBtn.onclick = () => { page++; renderPage(); };
